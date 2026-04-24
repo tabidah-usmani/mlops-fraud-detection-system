@@ -5,7 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   continuous-integration:
@@ -25,29 +25,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy scikit-learn
           pip install flake8 pytest
-          # Install other dependencies if requirements.txt exists
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
       - name: Linting with flake8
-        run: |
-          flake8 . --count --max-complexity=10 --statistics --exit-zero
+        run: flake8 . --count --max-complexity=10 --statistics --exit-zero
       
       - name: Data Validation
-        run: |
-          python -c "
-import pandas as pd
-import os
+        run: python tests/test_validation.py
 
-# Simple validation without actual data file
-print('✅ Data validation passed - Code structure OK')
-print('📊 Fraud detection system ready')
-"
-      
-      - name: Unit Tests (Basic)
-        run: |
-          python -c "
-print('✅ Unit tests passed')
-print('  - Data ingestion module: OK')
-print('  - Validation checks: OK')
-print('  - Model training pipeline: OK')
-"
+      - name: Unit Tests
+        run: python tests/test_validation.py
