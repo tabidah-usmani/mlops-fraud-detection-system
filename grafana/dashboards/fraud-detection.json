@@ -1,0 +1,50 @@
+{
+  "dashboard": {
+    "title": "Fraud Detection MLOps Dashboard",
+    "uid": "fraud-detection-mlops",
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Model Performance Overview",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 0, "w": 4, "h": 3},
+        "targets": [
+          {"expr": "model_recall", "legendFormat": "Recall"},
+          {"expr": "model_auc", "legendFormat": "AUC-ROC"}
+        ]
+      },
+      {
+        "title": "Fraud Prediction Rate",
+        "type": "graph",
+        "gridPos": {"x": 4, "y": 0, "w": 8, "h": 3},
+        "targets": [
+          {"expr": "rate(fraud_predictions_total{prediction='fraud'}[1h])", "legendFormat": "Fraud predictions"}
+        ]
+      },
+      {
+        "title": "API Latency (95th percentile)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 4, "w": 6, "h": 3},
+        "targets": [
+          {"expr": "histogram_quantile(0.95, rate(prediction_latency_seconds_bucket[5m]))", "legendFormat": "P95 Latency"}
+        ]
+      },
+      {
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": {"x": 6, "y": 4, "w": 6, "h": 3},
+        "targets": [
+          {"expr": "sum(rate(http_requests_total{status=~'5..'}[5m])) / sum(rate(http_requests_total[5m]))", "legendFormat": "Error Rate"}
+        ]
+      },
+      {
+        "title": "Feature Drift (PSI)",
+        "type": "table",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 4},
+        "targets": [
+          {"expr": "feature_drift_psi", "format": "table"}
+        ]
+      }
+    ]
+  }
+}

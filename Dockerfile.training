@@ -1,0 +1,19 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt . 2>/dev/null || echo "No requirements.txt"
+RUN pip install --no-cache-dir pandas numpy scikit-learn xgboost lightgbm imbalanced-learn matplotlib mlflow shap joblib
+
+# Copy application
+COPY fraud_pipeline.py .
+COPY master_pipeline.py . 2>/dev/null || echo "No master_pipeline"
+
+# Run training
+ENTRYPOINT ["python", "fraud_pipeline.py"]
