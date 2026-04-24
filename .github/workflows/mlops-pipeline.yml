@@ -34,20 +34,4 @@ jobs:
       
       - name: Data Validation
         run: |
-          python -c "
-import pandas as pd
-import os
 
-# Simple validation without actual data file
-print('✅ Data validation passed - Code structure OK')
-print('📊 Fraud detection system ready')
-"
-      
-      - name: Unit Tests (Basic)
-        run: |
-          python -c "
-print('✅ Unit tests passed')
-print('  - Data ingestion module: OK')
-print('  - Validation checks: OK')
-print('  - Model training pipeline: OK')
-"
