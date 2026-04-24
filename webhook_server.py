@@ -1,56 +1,81 @@
 """
-Webhook server to receive alerts and trigger retraining
+Webhook Receiver for Prometheus Alerts
+Receives alerts from Alertmanager and triggers actions
+Run: python webhook_server.py
 """
+
 from fastapi import FastAPI, Request
-import requests
+import uvicorn
 import json
+import datetime
 
-app = FastAPI()
-
-GITHUB_TOKEN = "your_github_token"
-REPO_OWNER = "your-username"
-REPO_NAME = "fraud-detection"
+app = FastAPI(title="Alert Webhook Receiver")
 
 @app.post("/alerts")
 async def receive_alert(request: Request):
+    """Receive alerts from Alertmanager"""
     alert_data = await request.json()
     
-    print(f"Received alert: {alert_data}")
+    print("="*60)
+    print(f"🔔 ALERT RECEIVED at {datetime.datetime.now()}")
+    print("="*60)
     
-    # Determine alert type
     for alert in alert_data.get('alerts', []):
-        alertname = alert.get('labels', {}).get('alertname')
+        status = alert.get('status', 'unknown')
+        alertname = alert.get('labels', {}).get('alertname', 'unknown')
         
-        if alertname == 'ModelRecallDrop':
-            print("🚨 Model recall drop detected - triggering retraining")
-            trigger_retraining("model_performance_drop", alert)
+        # Color coding for different statuses
+        if status == 'firing':
+            status_icon = "🔥 FIRING"
+        elif status == 'resolved':
+            status_icon = "✅ RESOLVED"
+        else:
+            status_icon = f"⚠️ {status.upper()}"
         
-        elif alertname == 'DataDriftDetected':
-            print("📊 Data drift detected - triggering retraining")
-            trigger_retraining("data_drift_detected", alert)
+        print(f"\n📋 Alert: {alertname}")
+        print(f"   Status: {status_icon}")
+        print(f"   Severity: {alert.get('labels', {}).get('severity', 'N/A')}")
+        print(f"   Summary: {alert.get('annotations', {}).get('summary', 'N/A')}")
+        print(f"   Description: {alert.get('annotations', {}).get('description', 'N/A')}")
+        
+        # Extract value from description if present
+        desc = alert.get('annotations', {}).get('description', '')
+        if 'Current recall' in desc:
+            print(f"   📊 Metric value: {desc}")
+        
+        # Log for CI/CD trigger
+        if status == 'firing' and alertname == 'ModelRecallDrop':
+            print(f"\n   🚀 ACTION TRIGGERED: Retraining pipeline should start")
+            print(f"   📡 Sending webhook to CI/CD system...")
+            # Here you would call GitHub API to trigger retraining
     
-    return {"status": "received"}
+    print("\n" + "="*60)
+    
+    return {"status": "received", "message": "Alert processed"}
 
-def trigger_retraining(event_type, alert_data):
-    """Trigger GitHub Actions workflow"""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/dispatches"
-    
-    payload = {
-        "event_type": event_type,
-        "client_payload": {
-            "alert": alert_data,
-            "timestamp": alert_data.get('startsAt')
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "webhook-receiver"}
+
+@app.get("/")
+async def root():
+    return {
+        "service": "Alert Webhook Receiver",
+        "endpoints": {
+            "POST /alerts": "Receive alerts from Alertmanager",
+            "GET /health": "Health check"
         }
     }
+
+if __name__ == "__main__":
+    print("="*60)
+    print("  ALERT WEBHOOK RECEIVER")
+    print("="*60)
+    print("  Listening for alerts on: http://0.0.0.0:8080")
+    print("  Alert endpoint: POST http://localhost:8080/alerts")
+    print("="*60)
+    print("\n⚠️  Make sure Alertmanager is configured to send alerts here")
+    print("   alertmanager.yml should have webhook URL:")
+    print("   - url: 'http://host.docker.internal:8080/alerts'\n")
     
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": f"token {GITHUB_TOKEN}"
-    }
-    
-    response = requests.post(url, json=payload, headers=headers)
-    
-    if response.status_code == 204:
-        print(f"✓ Triggered {event_type} retraining")
-    else:
-        print(f"✗ Failed to trigger: {response.status_code}")
+    uvicorn.run(app, host="0.0.0.0", port=8080)
