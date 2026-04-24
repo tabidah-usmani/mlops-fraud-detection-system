@@ -1,0 +1,48 @@
+groups:
+  - name: fraud_detection_alerts
+    interval: 30s
+    rules:
+      # Alert when model recall drops below 70%
+      - alert: ModelRecallDrop
+        expr: model_recall < 0.7
+        for: 5m
+        labels:
+          severity: critical
+          component: model
+        annotations:
+          summary: "Model recall dropped below 70%"
+          description: "Current recall: {{ $value }}"
+          action: "Trigger CI/CD for retraining"
+      
+      # Alert when AUC drops below threshold
+      - alert: ModelAucDrop
+        expr: model_auc < 0.85
+        for: 10m
+        labels:
+          severity: warning
+          component: model
+        annotations:
+          summary: "Model AUC dropped below 0.85"
+          description: "Current AUC: {{ $value }}"
+      
+      # Alert on API latency spike
+      - alert: ApiLatencySpike
+        expr: prediction_latency_seconds > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API latency spike detected"
+          description: "Latency: {{ $value }}s"
+      
+      # Alert on data drift
+      - alert: DataDriftDetected
+        expr: feature_drift_psi > 0.2
+        for: 1h
+        labels:
+          severity: warning
+          component: data
+        annotations:
+          summary: "Data drift detected for {{ $labels.feature }}"
+          description: "PSI score: {{ $value }}"

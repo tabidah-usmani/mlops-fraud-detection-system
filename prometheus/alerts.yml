@@ -1,0 +1,87 @@
+groups:
+  - name: fraud_detection_alerts
+    interval: 30s
+    rules:
+      # Alert when model recall drops below threshold
+      - alert: ModelRecallDrop
+        expr: model_recall < 0.7
+        for: 5m
+        labels:
+          severity: critical
+          component: model
+        annotations:
+          summary: "Model recall dropped below 70%"
+          description: "Current recall: {{ $value }}. Below threshold of 0.7"
+          action: "Trigger CI/CD for retraining"
+      
+      # Alert when AUC drops
+      - alert: ModelAucDrop
+        expr: model_auc < 0.85
+        for: 10m
+        labels:
+          severity: warning
+          component: model
+        annotations:
+          summary: "Model AUC dropped below 0.85"
+          description: "Current AUC: {{ $value }}"
+      
+      # Alert on API latency spike
+      - alert: ApiLatencySpike
+        expr: histogram_quantile(0.95, rate(prediction_latency_seconds_bucket[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "API latency spike detected"
+          description: "95th percentile latency: {{ $value }}s"
+      
+      # Alert on error rate increase
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate: {{ $value | humanizePercentage }}"
+
+  - name: data_drift_alerts
+    interval: 1h
+    rules:
+      # Alert on data drift
+      - alert: DataDriftDetected
+        expr: feature_drift_psi > 0.2
+        for: 2h
+        labels:
+          severity: warning
+          component: data
+        annotations:
+          summary: "Data drift detected for {{ $labels.feature }}"
+          description: "PSI score: {{ $value }}. Threshold: 0.2"
+          action: "Trigger model retraining"
+
+  - name: system_alerts
+    interval: 30s
+    rules:
+      # High CPU usage
+      - alert: HighCpuUsage
+        expr: sum(rate(container_cpu_usage_seconds_total[5m])) by (pod) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage on {{ $labels.pod }}"
+          description: "CPU usage: {{ $value | humanizePercentage }}"
+      
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "High memory usage detected"

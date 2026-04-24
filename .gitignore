@@ -1,0 +1,15 @@
+﻿data/
+*.csv
+*.zip
+mlartifacts/
+mlruns/
+artifacts/
+models/
+*.pkl
+*.joblib
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.db
+*.log
