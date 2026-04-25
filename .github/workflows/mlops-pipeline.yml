@@ -38,15 +38,15 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # Updated to v4
       
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # Updated to v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
       - name: Cache pip packages
-        uses: actions/cache@v3
+        uses: actions/cache@v4  # Updated to v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -74,13 +74,14 @@ jobs:
           "
       
       - name: Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Updated to v4
         if: always()
         with:
           name: test-results
           path: |
             .coverage
             pytest-output.xml
+          retention-days: 7
 
   # ============================================
   # JOB 2: MODEL TRAINING & VALIDATION
@@ -91,10 +92,10 @@ jobs:
     if: success() || github.event_name == 'repository_dispatch'
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # Updated to v4
       
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # Updated to v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
@@ -129,8 +130,10 @@ jobs:
                   f.write(str(metrics.get('recall', 0)))
           else:
               print('⚠️ No metrics file found')
-              print('0' > 'auc.txt')
-              print('0' > 'recall.txt')
+              with open('auc.txt', 'w') as f:
+                  f.write('0')
+              with open('recall.txt', 'w') as f:
+                  f.write('0')
           "
           
           echo "AUC=$(cat auc.txt)" >> $GITHUB_OUTPUT
@@ -149,7 +152,7 @@ jobs:
           echo "✅ Quality gate passed: AUC=$AUC >= $THRESHOLD"
       
       - name: Upload model artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Updated to v4
         with:
           name: model-artifacts
           path: |
@@ -166,26 +169,26 @@ jobs:
     if: success() && github.ref == 'refs/heads/main'
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # Updated to v4
       
       - name: Download model artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4  # Updated to v4
         with:
           name: model-artifacts
           path: artifacts/
       
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3  # Updated to v3
       
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3  # Updated to v3
         with:
           registry: ${{ env.DOCKER_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Build Inference API image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5  # Updated to v5
         with:
           context: .
           file: dockerfile.inference
@@ -197,7 +200,7 @@ jobs:
           cache-to: type=gha,mode=max
       
       - name: Build Training image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5  # Updated to v5
         with:
           context: .
           file: dockerfile.training
@@ -215,10 +218,10 @@ jobs:
     if: success() && github.ref == 'refs/heads/main'
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # Updated to v4
       
       - name: Download model artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4  # Updated to v4
         with:
           name: model-artifacts
           path: artifacts/
@@ -260,7 +263,7 @@ jobs:
     if: github.event_name == 'repository_dispatch'
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # Updated to v4
       
       - name: Log trigger information
         run: |
@@ -275,7 +278,7 @@ jobs:
           echo "=========================================="
       
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # Updated to v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       
@@ -305,6 +308,16 @@ jobs:
           if auc < 0.85:
               print(f'⚠️ Warning: Retrained model AUC ({auc}) below threshold')
           "
+      
+      - name: Upload retrained model artifacts
+        uses: actions/upload-artifact@v4  # Updated to v4
+        if: always()
+        with:
+          name: retrained-model-artifacts
+          path: |
+            artifacts/
+            models/
+          retention-days: 14
       
       - name: Send notification
         run: |
