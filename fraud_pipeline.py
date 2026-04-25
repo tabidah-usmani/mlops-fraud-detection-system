@@ -48,7 +48,17 @@ RANDOM_STATE  = 42
 for d in [ARTIFACTS_DIR, MODELS_DIR]:
     os.makedirs(d, exist_ok=True)
 
-mlflow.set_tracking_uri(MLFLOW_URI)
+# Check if running in GitHub Actions
+if os.getenv('GITHUB_ACTIONS') == 'true':
+    # In GitHub Actions - use local file storage (no server needed)
+    mlflow.set_tracking_uri("./mlruns")
+    os.makedirs("./mlruns", exist_ok=True)
+    print("📁 GitHub Actions mode - using local MLflow storage")
+else:
+    # Local development - use MLflow server
+    mlflow.set_tracking_uri(MLFLOW_URI)
+    print("🌐 Local mode - using MLflow server at", MLFLOW_URI)
+
 mlflow.set_experiment(EXPERIMENT)
 
 

@@ -83,6 +83,8 @@ jobs:
             pytest-output.xml
           retention-days: 7
 
+
+  
   # ============================================
   # JOB 2: MODEL TRAINING & VALIDATION
   # ============================================
@@ -103,6 +105,11 @@ jobs:
         run: |
           pip install pandas numpy scikit-learn xgboost lightgbm mlflow imbalanced-learn shap matplotlib joblib
       
+      - name: Setup MLflow for CI
+        run: |
+          mkdir -p ./mlruns
+          echo "MLFLOW_TRACKING_URI=./mlruns" >> $GITHUB_ENV
+          
       - name: Run training pipeline
         run: |
           python fraud_pipeline.py
