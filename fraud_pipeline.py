@@ -432,7 +432,50 @@ def task2_imbalance_comparison(X_train, X_val, y_train, y_val):
 
     return results, r1["y_prob"], r2["y_prob"]
 
-
+def evaluate_with_threshold_tuning(model, X, y, selected_features=None):
+    """
+    Evaluate model with optimal threshold tuning for imbalanced datasets.
+    Finds the threshold that maximizes F1 score.
+    """
+    if selected_features is not None:
+        X = X[selected_features]
+    
+    y_prob = model.predict_proba(X)[:, 1]
+    
+    # Find optimal threshold that maximizes F1 score
+    precisions, recalls, thresholds = precision_recall_curve(y, y_prob)
+    
+    # Calculate F1 scores for all thresholds
+    f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
+    
+    # Find best threshold (exclude the last point which has recall=0)
+    best_idx = np.argmax(f1_scores[:-1])
+    best_threshold = thresholds[best_idx] if len(thresholds) > 0 else 0.5
+    best_f1 = f1_scores[best_idx]
+    
+    # Apply optimal threshold
+    y_pred = (y_prob >= best_threshold).astype(int)
+    
+    # Also evaluate at default threshold for comparison
+    y_pred_default = (y_prob >= 0.5).astype(int)
+    default_recall = recall_score(y, y_pred_default, zero_division=0)
+    default_precision = precision_score(y, y_pred_default, zero_division=0)
+    
+    print(f"    Threshold tuning: best={best_threshold:.4f} (F1={best_f1:.4f}) | "
+          f"default=0.5 (P={default_precision:.3f}, R={default_recall:.3f})")
+    
+    cm = confusion_matrix(y, y_pred)
+    
+    return {
+        "precision": round(float(precision_score(y, y_pred, zero_division=0)), 4),
+        "recall": round(float(recall_score(y, y_pred, zero_division=0)), 4),
+        "f1_score": round(float(f1_score(y, y_pred, zero_division=0)), 4),
+        "auc_roc": round(float(roc_auc_score(y, y_prob)), 4),
+        "cm": cm,
+        "y_prob": y_prob,
+        "y_pred": y_pred,
+        "threshold": round(float(best_threshold), 4),
+    }
 # ================================================================
 # TASK 3 — MODEL COMPLEXITY (XGBoost, LightGBM, Hybrid) - FIXED
 # ================================================================
@@ -442,165 +485,296 @@ def task3_model_comparison(X_train, X_val, y_train, y_val):
     print("  XGBoost | LightGBM | Hybrid (RF + XGBoost)")
     print("="*60)
 
-    neg, pos  = int((y_train==0).sum()), int((y_train==1).sum())
-    spw       = neg / pos
-    all_res   = {}
+    neg, pos = int((y_train==0).sum()), int((y_train==1).sum())
+    spw = neg / pos
+    actual_fraud_rate = y_train.mean()
+    print(f"\n  [DEBUG] Training data stats:")
+    print(f"    Total samples: {len(y_train):,}")
+    print(f"    Fraud samples: {pos:,} ({actual_fraud_rate:.4%})")
+    print(f"    Non-fraud: {neg:,}")
+    print(f"    scale_pos_weight: {spw:.2f}")
+    
+    all_res = {}
     all_probs = {}
     sel_feats = None
+    models_dict = {}
 
+    # ============================================================
     # XGBoost
+    # ============================================================
     with mlflow.start_run(run_name="T3_XGBoost", nested=True):
         print("\n  [XGBoost] Training...")
         xgb_m = xgb.XGBClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.05,
-            subsample=0.8, colsample_bytree=0.8, scale_pos_weight=spw,
-            eval_metric="auc", tree_method="hist", random_state=RANDOM_STATE,
-            verbosity=0, early_stopping_rounds=30
+            n_estimators=300, 
+            max_depth=6, 
+            learning_rate=0.05,
+            subsample=0.8, 
+            colsample_bytree=0.8, 
+            scale_pos_weight=spw,
+            eval_metric="auc", 
+            tree_method="hist", 
+            random_state=RANDOM_STATE,
+            verbosity=0, 
+            early_stopping_rounds=30
         )
         xgb_m.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-        rx = evaluate(xgb_m, X_val, y_val)
-        all_res["XGBoost"]   = rx
+        
+        # Use threshold tuning for evaluation
+        rx = evaluate_with_threshold_tuning(xgb_m, X_val, y_val)
+        all_res["XGBoost"] = rx
         all_probs["XGBoost"] = rx["y_prob"]
+        models_dict["XGBoost"] = xgb_m
+        
         mlflow.log_metric("precision", rx["precision"])
-        mlflow.log_metric("recall",    rx["recall"])
-        mlflow.log_metric("f1_score",  rx["f1_score"])
-        mlflow.log_metric("auc_roc",   rx["auc_roc"])
+        mlflow.log_metric("recall", rx["recall"])
+        mlflow.log_metric("f1_score", rx["f1_score"])
+        mlflow.log_metric("auc_roc", rx["auc_roc"])
+        mlflow.log_metric("optimal_threshold", rx["threshold"])
         mlflow.xgboost.log_model(xgb_m, "xgboost_model")
-        print(f"  XGBoost  → P={rx['precision']} R={rx['recall']} AUC={rx['auc_roc']}")
+        print(f"  XGBoost → P={rx['precision']} R={rx['recall']} "
+              f"F1={rx['f1_score']} AUC={rx['auc_roc']} (threshold={rx['threshold']:.3f})")
 
-    # LightGBM
+    # ============================================================
+    # LightGBM - FIXED VERSION
+    # ============================================================
     with mlflow.start_run(run_name="T3_LightGBM", nested=True):
         print("\n  [LightGBM] Training...")
+        
+        # Cap scale_pos_weight to prevent extreme values
+        capped_spw = min(spw, 50.0)
+        print(f"    Capped scale_pos_weight: {capped_spw:.2f} (original: {spw:.2f})")
+        
         lgb_m = lgb.LGBMClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.05,
-            subsample=0.8, colsample_bytree=0.8, scale_pos_weight=spw,
-            random_state=RANDOM_STATE, verbosity=-1
+            n_estimators=300,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            scale_pos_weight=capped_spw,  # Use capped value
+            random_state=RANDOM_STATE,
+            verbose=-1,
+            min_child_samples=20,
+            num_leaves=31,  # Reduced from 63 to prevent overfitting
+            reg_lambda=0.1,  # L2 regularization
+            reg_alpha=0.1,   # L1 regularization
+            min_gain_to_split=0.01,
         )
-        lgb_m.fit(X_train, y_train, eval_set=[(X_val, y_val)],
-                  callbacks=[lgb.early_stopping(30, verbose=False),
-                              lgb.log_evaluation(0)])
-        rl = evaluate(lgb_m, X_val, y_val)
-        all_res["LightGBM"]   = rl
+        
+        lgb_m.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            eval_metric=['auc', 'logloss'],
+            callbacks=[
+                lgb.early_stopping(30, verbose=False),
+                lgb.log_evaluation(0)
+            ]
+        )
+        
+        # Debug predictions
+        y_probs = lgb_m.predict_proba(X_val)[:, 1]
+        print(f"\n  [DEBUG] LightGBM raw predictions:")
+        print(f"    Probability range: [{y_probs.min():.6f}, {y_probs.max():.6f}]")
+        print(f"    Probabilities > 0.5: {(y_probs > 0.5).sum()} / {len(y_probs)}")
+        print(f"    Probabilities > 0.1: {(y_probs > 0.1).sum()} / {len(y_probs)}")
+        print(f"    Probabilities > 0.05: {(y_probs > 0.05).sum()} / {len(y_probs)}")
+        
+        # Use threshold tuning for evaluation
+        rl = evaluate_with_threshold_tuning(lgb_m, X_val, y_val)
+        all_res["LightGBM"] = rl
         all_probs["LightGBM"] = rl["y_prob"]
+        models_dict["LightGBM"] = lgb_m
+        
         mlflow.log_metric("precision", rl["precision"])
-        mlflow.log_metric("recall",    rl["recall"])
-        mlflow.log_metric("f1_score",  rl["f1_score"])
-        mlflow.log_metric("auc_roc",   rl["auc_roc"])
+        mlflow.log_metric("recall", rl["recall"])
+        mlflow.log_metric("f1_score", rl["f1_score"])
+        mlflow.log_metric("auc_roc", rl["auc_roc"])
+        mlflow.log_metric("optimal_threshold", rl["threshold"])
         mlflow.lightgbm.log_model(lgb_m, "lightgbm_model")
-        print(f"  LightGBM → P={rl['precision']} R={rl['recall']} AUC={rl['auc_roc']}")
+        print(f"\n  LightGBM → P={rl['precision']} R={rl['recall']} "
+              f"F1={rl['f1_score']} AUC={rl['auc_roc']} (threshold={rl['threshold']:.3f})")
 
+    # ============================================================
     # Hybrid: RF feature selection + XGBoost
+    # ============================================================
     with mlflow.start_run(run_name="T3_Hybrid", nested=True):
         print("\n  [Hybrid] RF feature selection + XGBoost...")
-        rf = RandomForestClassifier(n_estimators=100, max_depth=8,
-                                    class_weight="balanced",
-                                    random_state=RANDOM_STATE, n_jobs=-1)
-        rf.fit(X_train, y_train)
-        feat_imp  = pd.DataFrame({"feature": X_train.columns,
-                                   "importance": rf.feature_importances_})\
-                      .sort_values("importance", ascending=False)
-        sel_feats = feat_imp.head(50)["feature"].tolist()
-        print(f"  Selected {len(sel_feats)} / {X_train.shape[1]} features")
-
-        hyb_m = xgb.XGBClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.05,
-            subsample=0.8, colsample_bytree=0.8, scale_pos_weight=spw,
-            eval_metric="auc", tree_method="hist", random_state=RANDOM_STATE,
-            verbosity=0, early_stopping_rounds=30
+        rf = RandomForestClassifier(
+            n_estimators=100, 
+            max_depth=8,
+            class_weight="balanced",
+            random_state=RANDOM_STATE, 
+            n_jobs=-1
         )
-        hyb_m.fit(X_train[sel_feats], y_train,
-                  eval_set=[(X_val[sel_feats], y_val)], verbose=False)
-        rh = evaluate(hyb_m, X_val, y_val, sel_feats)
-        all_res["Hybrid"]   = rh
+        rf.fit(X_train, y_train)
+        
+        feat_imp = pd.DataFrame({
+            "feature": X_train.columns,
+            "importance": rf.feature_importances_
+        }).sort_values("importance", ascending=False)
+        
+        # Select top 50 features or fewer if less than 50
+        n_features = min(50, X_train.shape[1])
+        sel_feats = feat_imp.head(n_features)["feature"].tolist()
+        print(f"    Selected {len(sel_feats)} / {X_train.shape[1]} features")
+        
+        hyb_m = xgb.XGBClassifier(
+            n_estimators=300, 
+            max_depth=6, 
+            learning_rate=0.05,
+            subsample=0.8, 
+            colsample_bytree=0.8, 
+            scale_pos_weight=spw,
+            eval_metric="auc", 
+            tree_method="hist", 
+            random_state=RANDOM_STATE,
+            verbosity=0, 
+            early_stopping_rounds=30
+        )
+        hyb_m.fit(
+            X_train[sel_feats], y_train,
+            eval_set=[(X_val[sel_feats], y_val)], 
+            verbose=False
+        )
+        
+        rh = evaluate_with_threshold_tuning(hyb_m, X_val, y_val, sel_feats)
+        all_res["Hybrid"] = rh
         all_probs["Hybrid"] = rh["y_prob"]
-        mlflow.log_metric("precision",        rh["precision"])
-        mlflow.log_metric("recall",           rh["recall"])
-        mlflow.log_metric("f1_score",         rh["f1_score"])
-        mlflow.log_metric("auc_roc",          rh["auc_roc"])
-        mlflow.log_param("features_selected", int(len(sel_feats)))
+        models_dict["Hybrid"] = hyb_m
+        
+        mlflow.log_metric("precision", rh["precision"])
+        mlflow.log_metric("recall", rh["recall"])
+        mlflow.log_metric("f1_score", rh["f1_score"])
+        mlflow.log_metric("auc_roc", rh["auc_roc"])
+        mlflow.log_metric("optimal_threshold", rh["threshold"])
+        mlflow.log_param("features_selected", len(sel_feats))
         mlflow.sklearn.log_model(hyb_m, "hybrid_model")
-
+        
         fi_path = os.path.join(ARTIFACTS_DIR, "t3_feature_importance.csv")
-        feat_imp.to_csv(fi_path, index=False); mlflow.log_artifact(fi_path)
-        print(f"  Hybrid   → P={rh['precision']} R={rh['recall']} AUC={rh['auc_roc']}")
+        feat_imp.to_csv(fi_path, index=False)
+        mlflow.log_artifact(fi_path)
+        print(f"  Hybrid → P={rh['precision']} R={rh['recall']} "
+              f"F1={rh['f1_score']} AUC={rh['auc_roc']} (threshold={rh['threshold']:.3f})")
 
-    # Comparison plots
-    names  = list(all_res.keys())
+    # ============================================================
+    # COMPARISON PLOTS
+    # ============================================================
+    names = list(all_res.keys())
     prec_v = [all_res[n]["precision"] for n in names]
-    rec_v  = [all_res[n]["recall"]    for n in names]
-    f1_v   = [all_res[n]["f1_score"]  for n in names]
-    auc_v  = [all_res[n]["auc_roc"]   for n in names]
+    rec_v = [all_res[n]["recall"] for n in names]
+    f1_v = [all_res[n]["f1_score"] for n in names]
+    auc_v = [all_res[n]["auc_roc"] for n in names]
+    thresh_v = [all_res[n]["threshold"] for n in names]
 
     # Bar chart
-    x = np.arange(len(names)); w = 0.2
-    fig, ax = plt.subplots(figsize=(12,6))
+    x = np.arange(len(names))
+    w = 0.2
+    fig, ax = plt.subplots(figsize=(12, 6))
     ax.bar(x-1.5*w, prec_v, w, label="Precision", color="steelblue")
-    ax.bar(x-0.5*w, rec_v,  w, label="Recall",    color="coral")
-    ax.bar(x+0.5*w, f1_v,   w, label="F1-Score",  color="green")
-    ax.bar(x+1.5*w, auc_v,  w, label="AUC-ROC",   color="purple")
-    ax.set_xticks(x); ax.set_xticklabels(names, fontsize=12)
-    ax.set_ylim(0,1.15); ax.set_ylabel("Score")
+    ax.bar(x-0.5*w, rec_v, w, label="Recall", color="coral")
+    ax.bar(x+0.5*w, f1_v, w, label="F1-Score", color="green")
+    ax.bar(x+1.5*w, auc_v, w, label="AUC-ROC", color="purple")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=12)
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Score")
     ax.set_title("Task 3: Model Comparison", fontsize=14)
     ax.axhline(THRESHOLD, color="red", ls="--", label=f"Deploy threshold ({THRESHOLD})")
-    ax.legend(); ax.grid(axis="y", alpha=0.3)
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    
+    # Add threshold annotations
+    for i, thresh in enumerate(thresh_v):
+        ax.annotate(f"opt={thresh:.2f}", xy=(x[i], prec_v[i]+0.05), 
+                   ha="center", fontsize=8, rotation=45)
+    
     plt.tight_layout()
     p = os.path.join(ARTIFACTS_DIR, "t3_model_comparison.png")
-    plt.savefig(p, dpi=150); plt.close()
+    plt.savefig(p, dpi=150)
+    plt.close()
     mlflow.log_artifact(p)
 
     # ROC curves
-    fig, ax = plt.subplots(figsize=(8,6))
-    colors  = ["steelblue","coral","green"]
-    for (n,prob),c in zip(all_probs.items(), colors):
-        fpr,tpr,_ = roc_curve(y_val, prob)
-        ax.plot(fpr, tpr, label=f"{n} (AUC={roc_auc_score(y_val, prob):.4f})", lw=2, color=c)
-    ax.plot([0,1],[0,1],"k--"); ax.set_xlabel("FPR"); ax.set_ylabel("TPR")
-    ax.set_title("ROC Curves — All Models"); ax.legend(); ax.grid(alpha=0.3)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    colors = ["steelblue", "coral", "green"]
+    for (n, prob), c in zip(all_probs.items(), colors):
+        fpr, tpr, _ = roc_curve(y_val, prob)
+        ax.plot(fpr, tpr, label=f"{n} (AUC={roc_auc_score(y_val, prob):.4f})", 
+                lw=2, color=c)
+    ax.plot([0, 1], [0, 1], "k--")
+    ax.set_xlabel("FPR")
+    ax.set_ylabel("TPR")
+    ax.set_title("ROC Curves — All Models")
+    ax.legend()
+    ax.grid(alpha=0.3)
     plt.tight_layout()
     p2 = os.path.join(ARTIFACTS_DIR, "t3_roc_curves.png")
-    plt.savefig(p2, dpi=150); plt.close()
+    plt.savefig(p2, dpi=150)
+    plt.close()
     mlflow.log_artifact(p2)
 
     # Confusion matrices
-    fig, axes = plt.subplots(1,3, figsize=(16,5))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     for ax, name in zip(axes, names):
         cm = all_res[name]["cm"]
         im = ax.imshow(cm, cmap=plt.cm.Blues)
         fig.colorbar(im, ax=ax)
-        ax.set(xticks=[0,1], yticks=[0,1],
-               xticklabels=["Not Fraud","Fraud"],
-               yticklabels=["Not Fraud","Fraud"],
+        ax.set(xticks=[0, 1], yticks=[0, 1],
+               xticklabels=["Not Fraud", "Fraud"],
+               yticklabels=["Not Fraud", "Fraud"],
                xlabel="Predicted", ylabel="True",
-               title=f"{name}\nConfusion Matrix")
-        thresh = cm.max()/2
+               title=f"{name}\n(threshold={all_res[name]['threshold']:.3f})")
+        thresh = cm.max() / 2
         for i in range(2):
             for j in range(2):
-                ax.text(j,i,format(cm[i,j],"d"),ha="center",va="center",
-                        color="white" if cm[i,j]>thresh else "black", fontsize=12)
+                ax.text(j, i, format(cm[i, j], "d"), ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black", fontsize=12)
     plt.suptitle("Confusion Matrices — Fraud Class", fontsize=14)
     plt.tight_layout()
     p3 = os.path.join(ARTIFACTS_DIR, "t3_confusion_matrices.png")
-    plt.savefig(p3, dpi=150, bbox_inches="tight"); plt.close()
+    plt.savefig(p3, dpi=150, bbox_inches="tight")
+    plt.close()
     mlflow.log_artifact(p3)
 
+    # Precision-Recall curves
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for (n, prob), c in zip(all_probs.items(), colors):
+        precision, recall, _ = precision_recall_curve(y_val, prob)
+        ax.plot(recall, precision, label=f"{n}", lw=2, color=c)
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-Recall Curves — All Models")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    p4 = os.path.join(ARTIFACTS_DIR, "t3_pr_curves.png")
+    plt.savefig(p4, dpi=150)
+    plt.close()
+    mlflow.log_artifact(p4)
+
     # Save comparison CSV
-    comp_rows = [{"Model":n,"Precision":all_res[n]["precision"],
-                  "Recall":all_res[n]["recall"],"F1":all_res[n]["f1_score"],
-                  "AUC-ROC":all_res[n]["auc_roc"]} for n in names]
-    comp_df   = pd.DataFrame(comp_rows)
+    comp_rows = [{
+        "Model": n,
+        "Precision": all_res[n]["precision"],
+        "Recall": all_res[n]["recall"],
+        "F1": all_res[n]["f1_score"],
+        "AUC-ROC": all_res[n]["auc_roc"],
+        "Optimal_Threshold": all_res[n]["threshold"]
+    } for n in names]
+    comp_df = pd.DataFrame(comp_rows)
     cp = os.path.join(ARTIFACTS_DIR, "t3_model_comparison.csv")
-    comp_df.to_csv(cp, index=False); mlflow.log_artifact(cp)
+    comp_df.to_csv(cp, index=False)
+    mlflow.log_artifact(cp)
 
     best_name = max(all_res, key=lambda n: all_res[n]["auc_roc"])
-    best_auc  = all_res[best_name]["auc_roc"]
+    best_auc = all_res[best_name]["auc_roc"]
 
-    print(f"\n  Model Comparison:")
+    print(f"\n  {'='*50}")
+    print(f"  Model Comparison Summary:")
     print(comp_df.to_string(index=False))
-    print(f"\n  Best Model : {best_name} (AUC={best_auc})")
+    print(f"\n  Best Model: {best_name} (AUC={best_auc:.4f})")
     print("  TASK 3 DONE ✓")
 
-    models = {"XGBoost": xgb_m, "LightGBM": lgb_m, "Hybrid": hyb_m}
-    return all_res, models, best_name, sel_feats, feat_imp
+    return all_res, models_dict, best_name, sel_feats, feat_imp
 
 
 # ================================================================
